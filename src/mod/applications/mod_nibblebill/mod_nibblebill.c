@@ -48,6 +48,7 @@
  * FUTURE: Possibly make the hooks not tied per-channel, and instead just do this as a supervision style application with one thread that watches all calls
  */
 
+#include <stdlib.h>
 #include <switch.h>
 
 typedef struct {
@@ -270,6 +271,35 @@ static switch_status_t exec_app(switch_core_session_t *session, const char *app_
 	free(dup);
 	return status;
 }
+
+static void play_warning(switch_core_session_t *session, int time_remaining)
+{
+	const char *uuid;
+	char *sound = NULL;
+	char *played_warning_variable = NULL;
+	const char *already_played = NULL;
+	switch_channel_t *channel = NULL;
+	switch_media_flag_t flags = SMF_ECHO_ALEG;
+
+	channel = switch_core_session_get_channel(session);
+
+	played_warning_variable = switch_mprintf("played_warning_%d", time_remaining);
+	if ( (already_played = switch_channel_get_variable(channel, played_warning_variable)) && !zstr(already_played) && strcasecmp(already_played, "true") == 0) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT,"Already played warning for %d minutes remaining.", time_remaining);
+		return;
+	}
+
+	/* Make sure we are in the media path on A leg */
+	uuid = switch_core_session_get_uuid(session);
+	switch_ivr_media(uuid, SMF_REBRIDGE);
+	sound = switch_mprintf("time_remaining_%d.wav", time_remaining);
+	switch_ivr_broadcast(uuid, sound, flags);
+	switch_safe_free(sound);
+
+	switch_channel_set_variable_printf(channel, played_warning_variable, "%s", "true");
+	switch_safe_free(played_warning_variable);
+}
+
 
 static void transfer_call(switch_core_session_t *session, char *destination)
 {
@@ -577,6 +607,21 @@ static switch_status_t do_billing(switch_core_session_t *session)
 				/* If you intend to give the user the option to re-up their balance, you must clear & resume billing once the balance is updated! */
 				nibblebill_pause(session);
 				transfer_call(session, globals.nobal_action);
+			} else { 
+				float minutes_remaining = ((balance - nobal_amt) / (float) atof(billrate));
+				float l1 = 9.5f; float h1 = 10.5f;
+				float l2 = 1.0f; float h2 = 2.0f;
+
+
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Minutes remaining: %f\n", minutes_remaining);
+				if ( minutes_remaining >= l1 && minutes_remaining <= h1) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Playing 10 minutes left...\n");
+					play_warning(session, 10);
+				}
+				else if ( minutes_remaining >= l2 && minutes_remaining <= h2) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Playing 1 minute left...\n");
+					play_warning(session, 1);
+				}
 			}
 		}
 	}
